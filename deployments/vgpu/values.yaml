@@ -1,0 +1,70 @@
+# Default values for 4pd-vgpu.
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+# 
+resourceName: "nvidia.com/gpu"
+resourceMem: "nvidia.com/gpumem"
+resourceCores: "nvidia.com/gpucores"
+schedulerName: "4pd-scheduler"
+
+podSecurityPolicy:
+  enabled: false
+
+global:
+  labels: {}
+  annotations: {}
+
+scheduler:
+  kubeScheduler:
+    image: "4pdosc/kube-scheduler:v1.20.9"
+    imagePullPolicy: IfNotPresent
+    extraArgs:
+      - -v=4
+  extender:
+    image: "4pdosc/k8s-vgpu:master"
+    imagePullPolicy: Always
+    extraArgs:
+      - --debug
+      - --default-mem=5000
+      - --default-cores=0
+      - -v=4
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  #serviceAccountName: "4pd-vgpu-scheduler-sa"
+  patch:
+    image: docker.io/jettech/kube-webhook-certgen:v1.5.2
+    imagePullPolicy: IfNotPresent
+    priorityClassName: ""
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    runAsUser: 2000
+
+  service:
+    httpPort: 443
+    grpcPort: 1080
+    labels: {}
+    annotations: {}
+
+devicePlugin:
+  image: "4pdosc/k8s-vgpu:master"
+  monitorimage: "4pdosc/k8s-vgpu:master"
+  monitorctrPath: /tmp/vgpu/containers
+  imagePullPolicy: Always
+  extraArgs:
+    - --device-split-count=10
+    - -v=4
+
+  pluginPath: /var/lib/kubelet/device-plugins
+  #libPath: /usr/local/vgpu
+  #sockPath: /var/lib/vgpu
+
+  podAnnotations: {}
+  nodeSelector:
+    gpu: "on"
+  tolerations: []
+

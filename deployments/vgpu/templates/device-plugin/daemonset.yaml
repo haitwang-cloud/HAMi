@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "4pd-vgpu.device-plugin" . }}
+  labels:
+    app.kubernetes.io/component: 4pd-device-plugin
+    {{- include "4pd-vgpu.labels" . | nindent 4 }}
+    {{- with .Values.global.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if .Values.global.annotations }}
+  annotations: {{ toYaml .Values.global.annotations | nindent 4}}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: 4pd-device-plugin
+      {{- include "4pd-vgpu.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: 4pd-device-plugin
+        4pd.io/webhook: ignore
+        {{- include "4pd-vgpu.selectorLabels" . | nindent 8 }}
+      {{- if .Values.devicePlugin.podAnnotations }}
+      annotations: {{ toYaml .Values.devicePlugin.podAnnotations | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "4pd-vgpu.imagePullSecrets" . | nindent 6}}
+      # serviceAccountName:
+      serviceAccountName: {{ include "4pd-vgpu.device-plugin" . }}
+      priorityClassName: system-node-critical
+      containers:
+        - name: device-plugin
+          image: {{ .Values.devicePlugin.image | quote }}
+          imagePullPolicy: {{ .Values.devicePlugin.imagePullPolicy | quote }}
+          lifecycle:
+            postStart:
+              exec:
+                command: ["/bin/sh","-c","mv /usrbin/nvidia-container-runtime /usrbin/nvidia-container-runtime-4pdbackup;cp /k8s-vgpu/bin/nvidia-container-runtime /usrbin/;cp -f /k8s-vgpu/lib/* /usr/local/vgpu/"]
+          #  preStop:
+          #    exec:
+          #      command: ["/bin/sh","-c","mv /usrbin/nvidia-container-4pdbackup /usrbin/nvidia-container-runtime"]
+          command:
+            - device-plugin
+            - --resource-name={{ .Values.resourceName }}
+            - --scheduler-endpoint={{ printf "%s:%d" ( include "4pd-vgpu.scheduler" . ) ( int .Values.scheduler.service.grpcPort ) }}
+            {{- range .Values.devicePlugin.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: lib
+              mountPath: /usr/local/vgpu
+            - name: sock
+              mountPath: /var/lib/vgpu
+            - name: usrbin
+              mountPath: /usrbin
+        - name: vgpu-monitor
+          image: {{ .Values.devicePlugin.image | quote }}
+          imagePullPolicy: {{ .Values.devicePlugin.imagePullPolicy | quote }}
+          command:
+            - vGPUmonitor
+          volumeMounts:
+            - name: ctrs
+              mountPath: /tmp/vgpu/containers
+            - name: dockers
+              mountPath: /run/docker
+      volumes:
+        - name: ctrs
+          hostPath:
+            path: {{ .Values.devicePlugin.monitorctrPath }}
+        - name: dockers
+          hostPath:
+            path: /run/docker
+        - name: device-plugin
+          hostPath:
+            path: {{ .Values.devicePlugin.pluginPath }}
+        - name: lib
+          hostPath:
+            path: /usr/local/vgpu
+            #path: {{ .Values.devicePlugin.libPath }}
+        - name: usrbin
+          hostPath:
+            path: /usr/bin
+        - name: sock
+          hostPath:
+            path: /var/lib/vgpu
+            #path: {{ .Values.devicePlugin.sockPath }}
+      {{- if .Values.devicePlugin.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.devicePlugin.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.devicePlugin.tolerations }}
+      tolerations: {{ toYaml .Values.devicePlugin.tolerations | nindent 8 }}
+      {{- end }}
+
+
