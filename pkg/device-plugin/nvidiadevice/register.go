@@ -14,42 +14,41 @@
  * limitations under the License.
  */
 
-package mlu
+package nvidiadevice
 
 import (
 	"context"
 	"fmt"
 	"time"
 
+	"github.com/NVIDIA/gpu-monitoring-tools/bindings/go/nvml"
 	"k8s.io/klog/v2"
-	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
 	"4pd.io/k8s-vgpu/pkg/api"
 	"4pd.io/k8s-vgpu/pkg/device-plugin/config"
-	"4pd.io/k8s-vgpu/pkg/device-plugin/mlu/cndev"
 	"4pd.io/k8s-vgpu/pkg/util"
 	"google.golang.org/grpc"
 )
 
-type DevListFunc func() []*pluginapi.Device
+type DevListFunc func() []*Device
 
 type DeviceRegister struct {
 	deviceCache *DeviceCache
-	unhealthy   chan *pluginapi.Device
+	unhealthy   chan *Device
 	stopCh      chan struct{}
 }
 
 func NewDeviceRegister(deviceCache *DeviceCache) *DeviceRegister {
 	return &DeviceRegister{
 		deviceCache: deviceCache,
-		unhealthy:   make(chan *pluginapi.Device),
+		unhealthy:   make(chan *Device),
 		stopCh:      make(chan struct{}),
 	}
 }
 
-func (r *DeviceRegister) Start(opt Options) {
+func (r *DeviceRegister) Start() {
 	r.deviceCache.AddNotifyChannel("register", r.unhealthy)
-	go r.WatchAndRegister(opt)
+	go r.WatchAndRegister()
 }
 
 func (r *DeviceRegister) Stop() {
@@ -59,31 +58,35 @@ func (r *DeviceRegister) Stop() {
 func (r *DeviceRegister) apiDevices() *[]*api.DeviceInfo {
 	devs := r.deviceCache.GetCache()
 	res := make([]*api.DeviceInfo, 0, len(devs))
-	for i, dev := range devs {
+	for _, dev := range devs {
+		ndev, err := nvml.NewDeviceByUUID(dev.ID)
 		//klog.V(3).Infoln("ndev type=", ndev.Model)
-		memory, _ := cndev.GetDeviceMemory(uint(i))
-		fmt.Println("mlu registered device id=", dev.dev.ID, "memory=", memory, "type=", cndev.GetDeviceModel(uint(i)))
-		registeredmem := int32(memory)
+		if err != nil {
+			fmt.Println("nvml new device by uuid error id=", dev.ID)
+			panic(0)
+		} else {
+			klog.V(3).Infoln("nvml registered device id=", dev.ID, "memory=", *ndev.Memory, "type=", *ndev.Model)
+		}
+		registeredmem := int32(*ndev.Memory)
 		if config.DeviceMemoryScaling > 1 {
 			fmt.Println("Memory Scaling to", config.DeviceMemoryScaling)
 			registeredmem = int32(float64(registeredmem) * config.DeviceMemoryScaling)
 		}
 		res = append(res, &api.DeviceInfo{
-			Id:     dev.dev.ID,
+			Id:     dev.ID,
 			Count:  int32(config.DeviceSplitCount),
 			Devmem: registeredmem,
-			Type:   fmt.Sprintf("%v-%v", "MLU", cndev.GetDeviceModel(uint(i))),
-			Health: dev.dev.Health == "healthy",
+			Type:   fmt.Sprintf("%v-%v", "NVIDIA", *ndev.Model),
+			Health: dev.Health == "healthy",
 		})
 	}
 	return &res
 }
 
-func (r *DeviceRegister) Register(ctx context.Context, endpoint string) error {
-	klog.Infof("Into Register")
+func (r *DeviceRegister) Register(ctx context.Context) error {
 	conn, err := grpc.DialContext(
 		ctx,
-		endpoint,
+		config.SchedulerEndpoint,
 		grpc.WithInsecure(),
 		grpc.WithBlock(),
 		//grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 3}),
@@ -98,7 +101,6 @@ func (r *DeviceRegister) Register(ctx context.Context, endpoint string) error {
 		err = fmt.Errorf("client register error, %v", err)
 		return err
 	}
-	klog.Infof("after client register")
 	req := api.RegisterRequest{Node: config.NodeName, Devices: *r.apiDevices()}
 	err = register.Send(&req)
 	if err != nil {
@@ -146,8 +148,8 @@ func (r *DeviceRegister) RegistrInAnnotation() error {
 		return err
 	}
 	encodeddevices := util.EncodeNodeDevices(*devices)
-	annos[util.NodeMLUHandshake] = "Reported " + time.Now().String()
-	annos[util.NodeMLUDeviceRegistered] = encodeddevices
+	annos[util.NodeHandshake] = "Reported " + time.Now().String()
+	annos[util.NodeNvidiaDeviceRegistered] = encodeddevices
 	klog.Infoln("Reporting devices", encodeddevices, "in", time.Now().String())
 	err = util.PatchNodeAnnotations(node, annos)
 
@@ -157,7 +159,7 @@ func (r *DeviceRegister) RegistrInAnnotation() error {
 	return err
 }
 
-func (r *DeviceRegister) WatchAndRegister(opt Options) {
+func (r *DeviceRegister) WatchAndRegister() {
 	//ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	//defer cancel()
 	klog.Infof("into WatchAndRegister")
