@@ -17,8 +17,8 @@ data:
       resourceCoreName: {{ .Values.resourceCores }}
       resourcePriorityName: {{ .Values.resourcePriority }}
       overwriteEnv: false
-      defaultMemory: 0
-      defaultCores: 0
+      defaultMemory: 3000
+      defaultCores: 25
       defaultGPUNum: 1
       deviceSplitCount: {{ .Values.devicePlugin.deviceSplitCount }}
       deviceMemoryScaling: {{ .Values.devicePlugin.deviceMemoryScaling }}

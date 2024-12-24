@@ -74,7 +74,10 @@ scheduler:
       - --debug
       - -v=4
   podAnnotations: {}
-  tolerations: []
+  tolerations: 
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
   #serviceAccountName: "hami-vgpu-scheduler-sa"
   admissionWebhook:
     customURL:
@@ -87,8 +90,8 @@ scheduler:
     whitelistNamespaces:
     # Specify the namespaces that the webhook will not be applied to.
       # - default
-      # - kube-system
-      # - istio-system
+      - kube-system
+      - istio-system
     reinvocationPolicy: Never
     failurePolicy: Ignore
   patch:
@@ -129,8 +132,11 @@ devicePlugin:
 
   podAnnotations: {}
   nvidianodeSelector:
-    gpu: "on"
-  tolerations: []
+    usage: "gpu"
+  tolerations: 
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
   # The updateStrategy for DevicePlugin DaemonSet.
   # If you want to update the DaemonSet by manual, set type as "OnDelete".
   # We recommend use OnDelete update strategy because DevicePlugin pod restart will cause business pod restart, this behavior is destructive.
