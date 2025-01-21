@@ -20,7 +20,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Project-HAMi/HAMi/pkg/monitor/nvidia"
 
@@ -257,19 +256,5 @@ func Observe(lister *nvidia.ContainerLister) {
 				c.Info.SetUtilizationSwitch(0)
 			}
 		}
-	}
-}
-
-func watchAndFeedback(lister *nvidia.ContainerLister) {
-	nvml.Init()
-	for {
-		time.Sleep(time.Second * 5)
-		err := lister.Update()
-		if err != nil {
-			klog.Errorf("Failed to update container list: %v", err)
-			continue
-		}
-		//klog.Infof("WatchAndFeedback srPodList=%v", srPodList)
-		Observe(lister)
 	}
 }
