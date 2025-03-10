@@ -24,34 +24,46 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
-
-	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
-
-	spec "github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/api/config/v1"
-	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/cdi"
-	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/imex"
-	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/rm"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
 	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
+
+	"github.com/Project-HAMi/HAMi/pkg/device"
+	"github.com/Project-HAMi/HAMi/pkg/device/nvidia"
+	spec "github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/api/config/v1"
+	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/cdi"
+	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/imex"
+	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/rm"
+	"github.com/Project-HAMi/HAMi/pkg/util"
 )
 
 const (
 	deviceListEnvVar                          = "NVIDIA_VISIBLE_DEVICES"
 	deviceListAsVolumeMountsHostPath          = "/dev/null"
 	deviceListAsVolumeMountsContainerPathRoot = "/var/run/nvidia-container-devices"
+	NodeLockNvidia                            = "hami.io/mutex.lock"
 )
+
+var (
+	hostHookPath string
+	ConfigFile   *string
+)
+
+func init() {
+	hostHookPath, _ = os.LookupEnv("HOOK_PATH")
+}
 
 // NvidiaDevicePlugin implements the Kubernetes device plugin API
 type NvidiaDevicePlugin struct {
 	rm                   rm.ResourceManager
-	config               *spec.Config
+	config               *nvidia.DeviceConfig
 	deviceListStrategies spec.DeviceListStrategies
 
 	cdiHandler          cdi.Interface
@@ -65,6 +77,10 @@ type NvidiaDevicePlugin struct {
 	imexChannels imex.Channels
 
 	mps mpsOptions
+
+	operatingMode   string
+	migCurrent      nvidia.MigPartedSpec
+	schedulerConfig nvidia.NvidiaConfig
 }
 
 // devicePluginForResource creates a device plugin for the specified resource.
@@ -302,13 +318,101 @@ func (plugin *NvidiaDevicePlugin) GetPreferredAllocation(ctx context.Context, r 
 // Allocate which return list of devices.
 func (plugin *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
 	responses := pluginapi.AllocateResponse{}
-	for _, req := range reqs.ContainerRequests {
+
+	nodeName := os.Getenv(util.NodeNameEnvName)
+	current, err := util.GetPendingPod(ctx, nodeName)
+	if err != nil {
+		return &responses, err
+	}
+
+	for idx, req := range reqs.ContainerRequests {
 		if err := plugin.rm.ValidateRequest(req.DevicesIDs); err != nil {
 			return nil, fmt.Errorf("invalid allocation request for %q: %w", plugin.rm.Resource(), err)
 		}
-		response, err := plugin.getAllocateResponse(req.DevicesIDs)
+		currentCtr, devreq, err := GetNextDeviceRequest(nvidia.NvidiaGPUDevice, *current)
+		klog.Infoln("deviceAllocateFromAnnotation=", devreq)
+		if err != nil {
+			device.PodAllocationFailed(nodeName, current, NodeLockNvidia)
+			return &responses, err
+		}
+		if len(devreq) != len(reqs.ContainerRequests[idx].DevicesIDs) {
+			device.PodAllocationFailed(nodeName, current, NodeLockNvidia)
+			return &responses, errors.New("device number not matched")
+		}
+		response, err := plugin.getAllocateResponse(plugin.GetContainerDeviceStrArray(devreq))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get allocate response: %v", err)
+		}
+
+		err = EraseNextDeviceTypeFromAnnotation(nvidia.NvidiaGPUDevice, *current)
+		if err != nil {
+			device.PodAllocationFailed(nodeName, current, NodeLockNvidia)
+			return &responses, err
+		}
+
+		if plugin.operatingMode != "mig" {
+			for i, dev := range devreq {
+				limitKey := fmt.Sprintf("CUDA_DEVICE_MEMORY_LIMIT_%v", i)
+				response.Envs[limitKey] = fmt.Sprintf("%vm", dev.Usedmem)
+			}
+			response.Envs["CUDA_DEVICE_SM_LIMIT"] = fmt.Sprint(devreq[0].Usedcores)
+			response.Envs["CUDA_DEVICE_MEMORY_SHARED_CACHE"] = fmt.Sprintf("%s/vgpu/%v.cache", hostHookPath, uuid.New().String())
+			if plugin.schedulerConfig.DeviceMemoryScaling > 1 {
+				response.Envs["CUDA_OVERSUBSCRIBE"] = "true"
+			}
+			if plugin.schedulerConfig.DisableCoreLimit {
+				response.Envs[util.CoreLimitSwitch] = "disable"
+			}
+			cacheFileHostDirectory := fmt.Sprintf("%s/vgpu/containers/%s_%s", hostHookPath, current.UID, currentCtr.Name)
+			os.RemoveAll(cacheFileHostDirectory)
+
+			os.MkdirAll(cacheFileHostDirectory, 0777)
+			os.Chmod(cacheFileHostDirectory, 0777)
+			os.MkdirAll("/tmp/vgpulock", 0777)
+			os.Chmod("/tmp/vgpulock", 0777)
+			response.Mounts = append(response.Mounts,
+				&pluginapi.Mount{ContainerPath: fmt.Sprintf("%s/vgpu/libvgpu.so", hostHookPath),
+					HostPath: GetLibPath(),
+					ReadOnly: true},
+				&pluginapi.Mount{ContainerPath: fmt.Sprintf("%s/vgpu", hostHookPath),
+					HostPath: cacheFileHostDirectory,
+					ReadOnly: false},
+				&pluginapi.Mount{ContainerPath: "/tmp/vgpulock",
+					HostPath: "/tmp/vgpulock",
+					ReadOnly: false},
+			)
+			found := false
+			for _, val := range currentCtr.Env {
+				if strings.Compare(val.Name, "CUDA_DISABLE_CONTROL") == 0 {
+					// if env existed but is set to false or can not be parsed, ignore
+					t, _ := strconv.ParseBool(val.Value)
+					if !t {
+						continue
+					}
+					// only env existed and set to true, we mark it "found"
+					found = true
+					break
+				}
+			}
+			if !found {
+				response.Mounts = append(response.Mounts, &pluginapi.Mount{ContainerPath: "/etc/ld.so.preload",
+					HostPath: hostHookPath + "/vgpu/ld.so.preload",
+					ReadOnly: true},
+				)
+			}
+			_, err = os.Stat(fmt.Sprintf("%s/vgpu/license", hostHookPath))
+			if err == nil {
+				response.Mounts = append(response.Mounts, &pluginapi.Mount{
+					ContainerPath: "/tmp/license",
+					HostPath:      fmt.Sprintf("%s/vgpu/license", hostHookPath),
+					ReadOnly:      true,
+				})
+				response.Mounts = append(response.Mounts, &pluginapi.Mount{
+					ContainerPath: "/usr/bin/vgpuvalidator",
+					HostPath:      fmt.Sprintf("%s/vgpu/vgpuvalidator", hostHookPath),
+					ReadOnly:      true,
+				})
+			}
 		}
 		responses.ContainerResponses = append(responses.ContainerResponses, response)
 	}

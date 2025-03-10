@@ -26,12 +26,13 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"k8s.io/klog/v2"
 
+	"github.com/Project-HAMi/HAMi/pkg/device/nvidia"
 	spec "github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/api/config/v1"
 )
 
 // resourceManager forms the base type for specific resource manager implementations
 type resourceManager struct {
-	config   *spec.Config
+	config   *nvidia.DeviceConfig
 	resource spec.ResourceName
 	devices  Devices
 }

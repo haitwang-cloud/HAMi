@@ -24,6 +24,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"k8s.io/klog/v2"
 
+	"github.com/Project-HAMi/HAMi/pkg/device/nvidia"
 	spec "github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/api/config/v1"
 	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/cdi"
 	"github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/pkg/imex"
@@ -38,7 +39,7 @@ type options struct {
 	failOnInitError bool
 
 	cdiHandler cdi.Interface
-	config     *spec.Config
+	config     *nvidia.DeviceConfig
 
 	deviceListStrategies spec.DeviceListStrategies
 

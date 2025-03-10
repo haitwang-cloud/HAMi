@@ -23,9 +23,8 @@ import (
 	"github.com/NVIDIA/go-nvlib/pkg/nvlib/device"
 	"github.com/NVIDIA/go-nvlib/pkg/nvlib/info"
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	"github.com/Project-HAMi/HAMi/pkg/device/nvidia"
 	"k8s.io/klog/v2"
-
-	spec "github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/api/config/v1"
 )
 
 type nvmlResourceManager struct {
@@ -36,7 +35,7 @@ type nvmlResourceManager struct {
 var _ ResourceManager = (*nvmlResourceManager)(nil)
 
 // NewNVMLResourceManagers returns a set of ResourceManagers, one for each NVML resource in 'config'.
-func NewNVMLResourceManagers(infolib info.Interface, nvmllib nvml.Interface, devicelib device.Interface, config *spec.Config) ([]ResourceManager, error) {
+func NewNVMLResourceManagers(infolib info.Interface, nvmllib nvml.Interface, devicelib device.Interface, config *nvidia.DeviceConfig) ([]ResourceManager, error) {
 	ret := nvmllib.Init()
 	if ret != nvml.SUCCESS {
 		return nil, fmt.Errorf("failed to initialize NVML: %v", ret)

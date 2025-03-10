@@ -166,6 +166,8 @@ func main() {
 			EnvVars: []string{"IMEX_REQUIRED"},
 		},
 	}
+	// add extra flags for HAMi
+	c.Flags = append(c.Flags, addFlags()...)
 	o.flags = c.Flags
 
 	err := c.Run(os.Args)
@@ -321,7 +323,13 @@ func startPlugins(c *cli.Context, o *options) ([]plugin.Interface, bool, error) 
 	}
 	spec.DisableResourceNamingInConfig(logger.ToKlog, config)
 
-	driverRoot := root(*config.Flags.Plugin.ContainerDriverRoot)
+	devConfig, err := generateDeviceConfigFromNvidia(config, c, o.flags)
+	if err != nil {
+		klog.Errorf("failed to load config file %s", err.Error())
+		return nil, false, err
+	}
+
+	driverRoot := root(*devConfig.Config.Flags.Plugin.ContainerDriverRoot)
 	// We construct an NVML library specifying the path to libnvidia-ml.so.1
 	// explicitly so that we don't have to rely on the library path.
 	nvmllib := nvml.New(
@@ -333,20 +341,20 @@ func startPlugins(c *cli.Context, o *options) ([]plugin.Interface, bool, error) 
 		nvinfo.WithDeviceLib(devicelib),
 	)
 
-	err = validateFlags(infolib, config)
+	err = validateFlags(infolib, devConfig.Config)
 	if err != nil {
 		return nil, false, fmt.Errorf("unable to validate flags: %v", err)
 	}
 
 	// Update the configuration file with default resources.
 	klog.Info("Updating config with default resource matching patterns.")
-	err = rm.AddDefaultResourcesToConfig(infolib, nvmllib, devicelib, config)
+	err = rm.AddDefaultResourcesToConfig(infolib, nvmllib, devicelib, devConfig.Config)
 	if err != nil {
 		return nil, false, fmt.Errorf("unable to add default resources to config: %v", err)
 	}
 
 	// Print the config to the output.
-	configJSON, err := json.MarshalIndent(config, "", "  ")
+	configJSON, err := json.MarshalIndent(devConfig.Config, "", "  ")
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to marshal config to JSON: %v", err)
 	}
@@ -354,7 +362,7 @@ func startPlugins(c *cli.Context, o *options) ([]plugin.Interface, bool, error) 
 
 	// Get the set of plugins.
 	klog.Info("Retrieving plugins.")
-	plugins, err := GetPlugins(infolib, nvmllib, devicelib, config)
+	plugins, err := GetPlugins(infolib, nvmllib, devicelib, devConfig.Config)
 	if err != nil {
 		return nil, false, fmt.Errorf("error getting plugins: %v", err)
 	}

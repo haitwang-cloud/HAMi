@@ -24,6 +24,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"k8s.io/klog/v2"
 
+	"github.com/Project-HAMi/HAMi/pkg/device/nvidia"
 	spec "github.com/Project-HAMi/HAMi/pkg/nvidia-plugin/api/config/v1"
 )
 
@@ -40,7 +41,7 @@ type deviceMapBuilder struct {
 type DeviceMap map[spec.ResourceName]Devices
 
 // NewDeviceMap creates a device map for the specified NVML library and config.
-func NewDeviceMap(infolib info.Interface, devicelib device.Interface, config *spec.Config) (DeviceMap, error) {
+func NewDeviceMap(infolib info.Interface, devicelib device.Interface, config *nvidia.DeviceConfig) (DeviceMap, error) {
 	b := deviceMapBuilder{
 		Interface:           devicelib,
 		migStrategy:         config.Flags.MigStrategy,
