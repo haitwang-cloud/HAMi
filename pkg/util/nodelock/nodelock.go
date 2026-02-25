@@ -49,8 +49,8 @@ var (
 	DefaultStrategy = wait.Backoff{
 		Steps:    5,
 		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.5,
+		Factor:   1.0,
+		Jitter:   0.1,
 	}
 )
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1224,17 +1225,17 @@ func Test_ListNodes_Concurrent(t *testing.T) {
 
 	m := newNodeManager()
 	stopCh := make(chan struct{})
-	done := make(chan struct{})
+	var wg sync.WaitGroup
 
-	go func() {
-		defer close(done)
+	// Goroutine 1: Continuous Writes (Adding/Updating random nodes)
+	wg.Go(func() {
 		i := 0
 		for {
 			select {
 			case <-stopCh:
 				return
 			default:
-				nodeID := fmt.Sprintf("node-%d", i%100)
+				nodeID := fmt.Sprintf("node-%d", i%100) // Rotate through 100 keys
 				m.addNode(nodeID,
 					&device.NodeInfo{
 						ID:   nodeID,
@@ -1252,16 +1253,19 @@ func Test_ListNodes_Concurrent(t *testing.T) {
 				i++
 			}
 		}
-	}()
+	})
 
+	// Goroutine 2: Continuous Iteration
+	// In the original buggy code, this WILL cause a panic:
+	// "fatal error: concurrent map iteration and map write"
 	for range 5000 {
 		nodes, _ := m.ListNodes()
+		// Iterating while the map is being modified in the background
 		for k, v := range nodes {
 			_ = k
 			_ = v
 		}
 	}
-
 	close(stopCh)
-	<-done
+	wg.Wait()
 }
